@@ -577,9 +577,25 @@ export default function App() {
       )}
 
       <footer className="footer">
-        <span className="mono dim">
-          D3 force layout · SVG · every model call goes through the backend on 3001 · keys live in this browser only
-        </span>
+        <div className="footer-line">
+          <span className="mono dim">
+            D3 force layout · SVG · every model call goes through the backend on 3001 · keys live in this browser only
+          </span>
+        </div>
+        <div className="footer-line credits">
+          <span className="credit">
+            Built by{' '}
+            <a href="https://harishkotra.me" target="_blank" rel="noreferrer noopener">
+              Harish Kotra
+            </a>
+          </span>
+          <span className="credit-sep" aria-hidden="true">
+            ·
+          </span>
+          <a className="credit" href="https://dailybuild.xyz" target="_blank" rel="noreferrer noopener">
+            Checkout my other builds
+          </a>
+        </div>
       </footer>
     </div>
   );

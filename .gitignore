@@ -1,8 +1,74 @@
-node_modules
-dist
+# ---------- secrets: never in the repo ----------
+# Weave reads no .env file at all — keys are typed into the UI and live in the
+# browser's localStorage. These patterns are here so a stray file never lands.
 .env
 .env.*
-*.local
-.DS_Store
+!.env.example
+*.pem
+*.key
+*.p12
+secrets.json
+credentials.json
+
+# ---------- dependencies ----------
+node_modules/
+.pnpm-store/
+.yarn/
+jspm_packages/
+
+# ---------- build output ----------
+dist/
+dist-ssr/
+build/
+out/
+.vite/
+*.tsbuildinfo
+.eslintcache
+.parcel-cache/
+
+# ---------- verification artifacts ----------
+# Raw run payloads and screenshots are evidence from YOUR machine, not source.
+# Screenshots meant for the docs belong in docs/ and are tracked normally.
+verify-output/
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# ---------- logs ----------
+logs/
+*.log
 npm-debug.log*
-verify-output
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ---------- editors and OS ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+*~
+
+# ---------- tooling caches ----------
+.npm/
+.eslintcache
+.stylelintcache
+.turbo/
+.cache/
+
+# ---------- local overrides ----------
+*.local
+*.local.*
+docker-compose.override.yml

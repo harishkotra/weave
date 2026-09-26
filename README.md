@@ -12,6 +12,65 @@ contradictions are dashed red.
 The headline number is the share of the answer both models agreed on, measured from node
 overlap — not from string similarity, not from an embedding.
 
+```
+                    one question, sent to both at the same instant
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+            ┌───────────────┐               ┌───────────────┐
+            │   Model A     │               │   Model B     │
+            │  (any provider)│              │  (any provider)│
+            └───────┬───────┘               └───────┬───────┘
+                    │ answer A                      │ answer B
+                    └───────────────┬───────────────┘
+                                    ▼
+                          ┌───────────────────┐
+                          │   Judge slot      │   EXTRACT: answer → atomic claims
+                          │  (its own provider)│  CLASSIFY: cross-model pairs
+                          └─────────┬─────────┘
+                                    │ claims + {a, b, relation, strength}
+                                    ▼
+                          ┌───────────────────┐
+                          │  matching + graph │   consensus core, rings, edges
+                          └─────────┬─────────┘
+                                    ▼
+              ┌─────────────────────┼─────────────────────┐
+              ▼                     ▼                     ▼
+        ┌──────────┐          ┌──────────┐          ┌──────────┐
+        │ A only   │          │ B only   │          │  Both    │
+        │ (cyan)   │          │ (magenta)│          │ (core)   │
+        └──────────┘          └──────────┘          └──────────┘
+```
+
+Built by [Harish Kotra](https://harishkotra.me) · more builds at
+[dailybuild.xyz](https://dailybuild.xyz) · [technical write-up](docs/blog.md)
+
+![Weave: two models, one question, three graphs](docs/screenshots/02-result.png)
+
+*One real run: `openai/gpt-oss-20b` against `google/gemma-4-e4b`, judged by `gpt-oss-20b`.
+9 shared claims, 3 each only one model made, 60% consensus, 54.8s.*
+
+---
+
+## Table of contents
+
+- [Quick start](#quick-start)
+- [What you see on screen](#what-you-see-on-screen)
+- [How one run works](#how-one-run-works)
+- [The three views](#the-three-views)
+- [Architecture](#architecture)
+- [Technologies](#technologies)
+- [The interesting parts, in code](#the-interesting-parts-in-code)
+- [Capability detection, never assumptions](#capability-detection-never-assumptions)
+- [Providers](#providers)
+- [Ports](#ports)
+- [Repository map](#repository-map)
+- [Verification](#verification)
+- [Fork it and contribute](#fork-it-and-contribute)
+- [Feature ideas](#feature-ideas)
+- [Non-goals](#non-goals)
+- [Credits](#credits)
+
 ---
 
 ## Quick start
@@ -29,42 +88,62 @@ No API key exists anywhere in this repository, and nothing is read from a `.env`
 are typed into the UI, sent only to the local backend, and used only for that provider's
 `/chat/completions`.
 
-Requirements: Node 20+.
+Requirements: Node 20+. No database, no Docker, no build step for the backend.
+
+**Try it with zero cost and zero keys:** run [Ollama](https://ollama.com) or
+[LM Studio](https://lmstudio.ai), pick that provider in all three slots, and load a model
+into each. Everything works offline.
 
 ---
 
-## Providers
+## What you see on screen
 
-Two model slots (A and B) plus a judge slot. Every slot has its **own** provider, base URL,
-API key and model name — a local model can judge two cloud models, or the other way round.
+Three slots, each with its own provider, base URL, key and model. Keys are typed here and
+saved in this browser only:
 
-| Provider | Base URL | Key | Models |
-| --- | --- | --- | --- |
-| Particle.ai | `https://api.particle.ai/v1` | required | `deepseek-v4.1-flash`, `deepseek-v4-flash-0731`, `glm5.3flash` |
-| Ollama | `http://127.0.0.1:11434/v1` | none | read live from `GET /v1/models` |
-| LM Studio | `http://127.0.0.1:1234/v1` | none | read live from `GET /v1/models` |
-| OpenRouter | `https://openrouter.ai/api/v1` | required | read live from `GET /v1/models` |
-| Custom | anything OpenAI-compatible | depends | whatever you type |
+![The configuration: three slots, each with its own provider](docs/screenshots/01-idle.png)
 
-Defaults: A = Particle.ai / `deepseek-v4-flash-0731`, B = Particle.ai / `deepseek-v4.1-flash`,
-judge = same as B, temperature 0.7, max tokens 1600 (judge 2000), reasoning off for A and B
-and on for the judge — a judge that spends its budget on hidden chain-of-thought returns no
-JSON. Every slot has its own **Disable reasoning** toggle, and it only renders where the flag
-can actually be sent (Particle.ai + `deepseek-*`).
+| Panel | What is in it |
+| --- | --- |
+| **A only** | every claim Model A made. Cyan nodes. Links are a bipartite projection: two of A's claims that touch the same claim in B are linked — solid if they agree with it the same way, dashed if they disagree. |
+| **B only** | the same for Model B, magenta. |
+| **Both** | the overlap. Each matched pair of claims merges into one white node with a halo ring — that is the consensus core. Claims only one model made are pushed outward into two rings. |
 
-**The model field is always typeable.** `deepseek-v4-flash-0731` does not appear in
-Particle.ai's `/models` list and still answers, so a run is never gated on the model list
-succeeding. If a provider is unreachable you get the provider's real error text:
+Above each panel: claim count, unique count, overlap %, mean contradiction strength. Above
+the three panels: the one loud number in the interface — **the share of the answer both
+models agreed on** — plus claims linked across models and the same overlap measured by text
+volume. Under the panels: an evidence block that prints the node-count proof, the edge
+provenance, the consensus arithmetic, the reasoning-token readings, the prompt-nonce check
+and both answer hashes. Nothing on that screen is decoration; every number is computed from
+the run that just happened.
 
-```
-Cannot reach http://127.0.0.1:11434 — is Ollama running?
-detail: connect ECONNREFUSED 127.0.0.1:11434 (ECONNREFUSED) · tried http://127.0.0.1:11434/v1/chat/completions
-hint:   Start Ollama, then press Run again. No API key is needed for Ollama.
-```
+The overlap view on its own, which is also what the 1080×1080 share card renders:
+
+![The Both panel: a white consensus core with two rings of unique claims](docs/screenshots/03-overlap.png)
+
+Exports: **Download SVG** per panel, a 1080×1080 **PNG share card** of the overlap view, and
+**Copy results as JSON** with the raw claims, edges, judge pairs and prompts.
 
 ---
 
 ## How one run works
+
+```
+[0.0s]  asking       A and B called concurrently, byte-identical question text
+[13.5s] extracting   judge splits answer A and answer B into atomic claims (concurrently)
+[21.6s] classifying  judge returns cross-model pairs {a, b, agree|contradict, strength}
+[21.7s] matching     maximum bipartite matching over agree pairs → consensus core
+[21.8s] simulating   d3-force runs until the layout settles, panels report progress
+```
+
+Each stage is a real `progress` event from the backend, not a timer. If the judge is slow,
+"extracting" sits on screen for as long as extraction takes.
+
+Every model call carries a fresh random nonce in the prompt, and the run asserts that all
+five prompts (A, B, extract A, extract B, classify) were unique — so a provider-side cache
+can never serve you a previous answer.
+
+### Prompts and budgets, exactly
 
 ```
 POST /api/weave { question, config }              Server-Sent Events
@@ -123,13 +202,219 @@ length)` — so how much text it took to say something is visible as size.
 
 ### The consensus number
 
-- Agree pairs with strength ≥ 0.5 form a **matching** (greedy by judge strength, then lexical
-  similarity as a tie-break), so every claim is counted at most once. Contradictions never
-  form consensus.
+- Agree pairs with strength ≥ 0.5 form a **maximum matching** (Kuhn's algorithm, candidate
+  lists sorted by judge strength then lexical similarity), so every claim is counted at most
+  once and the result cannot depend on the order the judge listed its pairs in.
+  Contradictions never form consensus.
 - `sharedPairs` = matched pairs, `aOnly` / `bOnly` = claims left over.
 - **Consensus by nodes** = `sharedPairs / (sharedPairs + aOnly + bOnly)`. Two identical
   answers score 100%.
-- **Consensus by text** = matched characters ÷ all characters. Both are shown.
+- **Claims linked across models** = claims with at least one agree relation to the other
+  answer, ÷ all claims. This is the generous reading: it stays high when the two answers agree
+  but split the same point into a different number of claims.
+- **Consensus by text** = matched characters ÷ all characters. All three are shown.
+
+---
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────── browser ────────────────────────────────┐
+│  React 18 + TypeScript (Vite)                                            │
+│                                                                          │
+│   App.tsx ── state machine: idle → asking → extracting → classifying     │
+│            → simulating → settled                                        │
+│      │                                                                   │
+│      ├── SlotCard ×3        provider / base URL / key / model per slot   │
+│      ├── GraphPanel ×3      d3-force → SVG, drag, hover, export          │
+│      └── lib/api.ts         fetch + ReadableStream (SSE frames)          │
+│                                                                          │
+│   localStorage: weave.config.v1  (keys never leave this browser except   │
+│                                   to the backend below)                  │
+└────────────────────────────────┬─────────────────────────────────────────┘
+                                 │  POST /api/weave   (text/event-stream)
+                                 │  POST /api/models  (JSON)
+                                 ▼
+┌──────────────────────── backend (Express, port 3001) ───────────────────┐
+│  index.ts      routes, SSE framing, keepalive comments                   │
+│  weave.ts      orchestration: A ∥ B → extract ∥ extract → classify       │
+│  providers.ts  the ONLY module that speaks to a model provider           │
+│  judge.ts      prompts, tolerant parsing, retry, lexical fallback        │
+│  graph.ts      maximum-matching consensus, panels, stats                 │
+│  json.ts       parseJsonLoose (fences, prose, trailing commas, …)        │
+└───────┬─────────────────────┬─────────────────────┬─────────────────────┘
+        │                     │                     │
+        ▼                     ▼                     ▼
+  Particle.ai            Ollama / LM Studio     OpenRouter / Custom
+  (key required)         (no key, localhost)    (key required)
+```
+
+Three rules hold the shape of this codebase together:
+
+1. **The browser never calls a model provider.** Every request goes through the backend.
+   That is what makes local providers work without CORS setup and keeps keys off the client.
+2. **`server/providers.ts` is the only module that speaks HTTP to a provider.** Adding a
+   provider means adding a preset, not touching the pipeline.
+3. **The graph is built from judge output, never from string matching of the answers.**
+   The lexical path exists, but it announces itself in the UI and in the JSON.
+
+---
+
+## Technologies
+
+| Layer | Choice | Why this one |
+| --- | --- | --- |
+| Build | **Vite 6** | instant dev server, proxy for `/api`, zero-config TS |
+| UI | **React 18 + TypeScript 5.7** (strict) | the state machine is small; strict mode catches the D3 typing traps |
+| Graphs | **d3-force, d3-selection, d3-drag, d3-zoom** → **SVG** | forces and SVG only. No three.js, no graph library on top of D3 — the layout *is* the point, so it is not hidden behind an abstraction |
+| Backend | **Node + Express 4 + tsx** | one process, no build step, SSE out of the box |
+| Transport | **Server-Sent Events over POST** | the staged UI shows the real pipeline stages; EventSource cannot POST |
+| Model calls | **plain `fetch`** to `{baseUrl}/chat/completions` | no SDK, so any OpenAI-compatible endpoint works, including `http://127.0.0.1:1234/v1` |
+| Fonts | **Archivo Variable + JetBrains Mono Variable** (self-hosted via `@fontsource-variable`) | no network dependency at runtime; numbers get a mono face |
+| Verification | **`node:fetch` script + Playwright** | one hits the API, the other drives the real page |
+
+Seven runtime dependencies. That is the whole list.
+
+---
+
+## The interesting parts, in code
+
+### 1. The judge is a JSON API, not a chatbot
+
+```ts
+// server/judge.ts
+export const JUDGE_SYSTEM = 'You are a strict JSON API. Output only valid JSON.';
+
+export function buildExtractPrompt(answer: string, modelLabel: 'A' | 'B', nonce: string) {
+  return [
+    `ANSWER FROM MODEL ${modelLabel}:`,   // labels differ so the two prompts are never identical
+    answer,
+    '',
+    'Split the following answer into atomic claims. Return JSON array of strings, max 12 items. No commentary.',
+  ].join('\n') + nonceTag(nonce);
+}
+```
+
+Local models do not always obey. `parseJsonLoose` tries, in order: the raw text, fence
+stripping, smart quotes → straight, single → double quotes, Python literals
+(`True`/`False`/`None`), trailing commas, a prose preamble sliced down to the first balanced
+`[...]`/`{...}`, then the same after repair. If it still fails, the call is retried once with
+a shorter instruction. If *that* fails, the run does not die — it degrades to sentence-split
+claims and lexical Jaccard edges, and every surface says so:
+
+```
+fallback: lexical
+```
+
+The UI shows that label, the copied JSON carries `parseMode: "fallback-lexical"`, and the
+evidence block names the reason the judge gave. A wrong answer that announces itself is
+worth more than a pretty one that lies.
+
+### 2. Consensus is a maximum matching, not a greedy guess
+
+A claim in A can agree with several claims in B. Counting it more than once would inflate the
+headline, so consensus is a matching — each claim counted once — and it has to be a
+**maximum** matching, or the number would depend on the order the judge happened to list its
+pairs in:
+
+```ts
+// server/graph.ts — Kuhn's algorithm, strength-sorted candidate lists
+const assign = (a: number, visited: Set<number>): boolean => {
+  for (const b of adjacency.get(a) ?? []) {
+    if (visited.has(b)) continue;
+    visited.add(b);
+    const holder = bToA.get(b);
+    if (holder === undefined || assign(holder, visited)) {
+      bToA.set(b, a);
+      aToB.set(a, b);
+      return true;
+    }
+  }
+  return false;
+};
+```
+
+Greedy matching reported the same-model control at 50%; maximum matching reports 71.4% on
+the same judge output. That gap was a bug in my arithmetic, not a property of the models.
+
+Two readings are reported, because one number cannot carry the whole story:
+
+- **consensus by nodes** (the headline) — matched pairs ÷ claim-nodes, strict one-to-one;
+- **claims linked across models** — claims with at least one relation to the other answer,
+  which stays high when the two answers agree but split their points differently;
+- **consensus by text** — the same overlap measured in characters.
+
+### 3. The overlap view merges pairs, so agree edges become self-loops
+
+In the `Both` panel a matched pair collapses into one consensus node. The agree edge between
+them is now an edge from a node to itself, which D3 will not draw. Rather than silently lose
+it, the result accounts for it:
+
+```ts
+// server/graph.ts
+absorbedIntoCore: bothEdges.filter((edge) => edge.source === edge.target).length,
+drawnEdges: bothEdges.filter((edge) => edge.source !== edge.target).length,
+agreeCount: judgeAgreements.length,        // what the judge actually said
+contradictionCount: judgeContradictions.length,
+```
+
+The panel then says "8 agree pairs became the core, 1 edge is drawn here", and the raw
+`judge.pairs` array ships in the JSON so you can check it yourself.
+
+### 4. Capability detection instead of assumptions
+
+```ts
+// shared/providers.ts
+export function supportsThinkingFlag(slot: SlotConfig): boolean {
+  return slot.provider === 'particle' && slot.model.trim().toLowerCase().startsWith('deepseek-');
+}
+export function shouldSendThinkingFlag(slot: SlotConfig, disableReasoning: boolean): boolean {
+  return disableReasoning && supportsThinkingFlag(slot);
+}
+```
+
+- `reasoning_tokens` is read from `usage.completion_tokens_details.reasoning_tokens`, or
+  `usage.reasoning_tokens`. If neither exists the UI prints **n/a** and hides the thinking
+  toggle for that slot. It never prints `0` and never invents a number.
+- The toggle is per slot, and only renders where the flag can actually be sent.
+- `reasoning_content`, `reasoning`, `thinking`, `chain_of_thought` and friends are **deleted
+  from the response before anything reads it**. Only the token *count* is ever shown.
+- HTTP 200 with empty content means hidden chain-of-thought ate the budget. That is retried
+  once with double the budget (cap 4000) instead of being reported as a refusal.
+
+### 5. SSE over POST, and the bug that hid every stage
+
+`EventSource` cannot POST, so the client reads the stream by hand:
+
+```ts
+// src/lib/api.ts
+const reader = response.body.getReader();
+const frames = buffer.split('\n\n');
+buffer = frames.pop() ?? '';
+for (const frame of frames) {
+  const event = frame.match(/^event:\s*(.+)$/m)?.[1];
+  if (event === 'progress') options.onProgress(JSON.parse(data));
+  else if (event === 'result') result = JSON.parse(data);
+}
+```
+
+And on the server, the disconnect must be detected on the **response**:
+
+```ts
+// server/index.ts
+// Watch the RESPONSE for the disconnect, never the request: on Node 16+
+// req 'close' fires as soon as the request body has been read, which is
+// immediately here, and it would silently swallow every progress event after
+// the first — leaving the staged UI stuck on "asking".
+let clientGone = false;
+res.on('close', () => { clientGone = true; clearInterval(keepalive); });
+```
+
+That comment is the bug report. The first version watched `req.on('close')`, so every stage
+after "asking" was dropped and the UI sat on one label for the whole run. The browser
+verification caught it because it asserts the five stage labels appear **in order**.
 
 ---
 
@@ -137,12 +422,47 @@ length)` — so how much text it took to say something is visible as size.
 
 | Situation | What Weave does |
 | --- | --- |
-| `usage.completion_tokens_details.reasoning_tokens` present | shows that number |
+| provider reports `reasoning_tokens` | shows the count, offers the thinking toggle (if the flag can be sent) |
 | that field absent (normal for Ollama, common for LM Studio) | shows **n/a** and hides the thinking toggle for that slot — never prints 0 |
 | `chat_template_kwargs {"enable_thinking": false}` | sent **only** when that slot is Particle.ai **and** the model name starts with `deepseek-` |
-| HTTP 200 with empty content | treated as the hidden CoT eating the budget: retried **once** with double `max_tokens` (cap 4000), never as a refusal |
-| `reasoning_content` / `reasoning` in the message | stripped at the edge, before anything else reads the response. Never logged, never returned, never stored. Only the token **count** is shown |
-| repeated-run experiment | a fresh random nonce is appended to every prompt; A and B get byte-identical question text, and all prompt hashes are checked for reuse (`promptReuse.duplicates` must be 0) |
+| the toggle is on but cannot be sent | a warning is attached to the run instead of silently ignoring you |
+| provider returns HTTP 200 with empty content | retried once with double `max_tokens` (cap 4000); the retry is reported |
+| `/models` fails or is unsupported | the run still goes ahead — the model field is always typeable |
+| local server is not running | `Cannot reach http://127.0.0.1:11434 — is Ollama running?` plus the real cause and the exact URL tried |
+| the judge returns prose instead of JSON | retry, then sentence-split claims + lexical edges, labelled `fallback: lexical` |
+
+---
+
+## Providers
+
+Two model slots (A and B) plus a judge slot. Every slot has its **own** provider, base URL,
+API key and model name — a local model can judge two cloud models, or the other way round.
+
+| Provider | Base URL | Key | Models |
+| --- | --- | --- | --- |
+| Particle.ai | `https://api.particle.ai/v1` | required | `deepseek-v4.1-flash`, `deepseek-v4-flash-0731`, `glm5.3flash` |
+| Ollama | `http://127.0.0.1:11434/v1` | none | read live from `GET /v1/models` |
+| LM Studio | `http://127.0.0.1:1234/v1` | none | read live from `GET /v1/models` |
+| OpenRouter | `https://openrouter.ai/api/v1` | required | read live from `GET /v1/models` |
+| Custom | anything OpenAI-compatible | depends | whatever you type |
+
+Defaults: A = Particle.ai / `deepseek-v4-flash-0731`, B = Particle.ai / `deepseek-v4.1-flash`,
+judge = same as B, temperature 0.7, max tokens 1600 (judge 2000), reasoning off for A and B
+and on for the judge — a judge that spends its budget on hidden chain-of-thought returns no
+JSON. Every slot has its own **Disable reasoning** toggle, and it only renders where the flag
+can actually be sent (Particle.ai + `deepseek-*`).
+
+**The model field is always typeable.** `deepseek-v4-flash-0731` does not appear in
+Particle.ai's `/models` list and still answers, so a run is never gated on the model list
+succeeding. If a provider is unreachable you get the provider's real error text:
+
+```
+Cannot reach http://127.0.0.1:11434 — is Ollama running?
+detail: connect ECONNREFUSED 127.0.0.1:11434 (ECONNREFUSED) · tried http://127.0.0.1:11434/v1/chat/completions
+hint:   Start Ollama, then press Run again. No API key is needed for Ollama.
+```
+
+---
 
 ---
 
@@ -176,7 +496,18 @@ server/json.ts           tolerant JSON parser
 shared/                  provider presets, capability rules, result types
 scripts/verify.mjs       data verification against the running API
 scripts/shots.py         browser verification (Playwright): states, exports, console errors
+docs/blog.md             the technical write-up of this build
+docs/launch-copy.md      the X thread and LinkedIn post for this build
+docs/screenshots/        the images used above
 ```
+
+New files you would touch for the three most likely contributions:
+
+| You want to… | Touch |
+| --- | --- |
+| add a provider | `shared/providers.ts` (one preset entry) — nothing else, if it is OpenAI-compatible |
+| change the judge prompts | `server/judge.ts` (`buildExtractPrompt`, `buildClassifyPrompt`) |
+| change the graph or the layout | `server/graph.ts` (data), `src/components/GraphPanel.tsx` (forces, rendering) |
 
 ---
 
@@ -304,6 +635,122 @@ panel, and overlapping labels.
 - **The thinking toggle was one global switch.** Capability is per slot, so the toggle is now
   per slot and only renders where the flag can actually be sent.
 
+## Fork it and contribute
+
+```bash
+git clone <this repo> weave && cd weave
+npm install
+npm run dev            # backend on 3001, front end on 5173
+npm run typecheck      # both tsconfigs must stay clean
+```
+
+### Ground rules
+
+1. **No API key in the repo, ever.** Not in a `.env`, not in a default config, not in a test
+   fixture. Keys are typed into the UI. A PR that adds a key-shaped string will be rejected on
+   sight.
+2. **Model calls go through the backend.** The browser must never talk to a provider
+   directly; that is what keeps local providers CORS-free and keys off the client.
+3. **No fake numbers.** If a provider does not report reasoning tokens, the UI shows `n/a`.
+   It never shows `0`, never estimates, never rounds a fallback up into a real measurement.
+   The same applies to the consensus number: it is computed from judge output, and when the
+   judge fails, the fallback announces itself.
+4. **Degrade, do not die.** A dead local server, an unparseable judge, an unloaded model —
+   each has a specific message with the provider's real error text and a hint. `Something went
+   wrong` is not an acceptable error string in this codebase.
+5. **Keep the layout in D3.** No three.js, no graph library on top of `d3-force`. The force
+   simulation is the subject of the app, not an implementation detail.
+
+### Before you open a PR
+
+```bash
+npm run typecheck
+node scripts/verify.mjs all         # needs a running backend + reachable models
+WEAVE_URL=http://localhost:5173/ python scripts/shots.py --run   # needs Playwright
+```
+
+`verify.mjs` prints a PASS/FAIL line per assertion and exits non-zero on failure, so it works
+as a pre-push check. If you change the pipeline, add an assertion that would have caught the
+bug you just fixed — that is how most of the list above got there.
+
+### Adding a provider (the common case)
+
+```ts
+// shared/providers.ts
+export const PROVIDER_PRESETS: ProviderPreset[] = [
+  // …
+  {
+    id: 'together',
+    label: 'Together',
+    baseUrl: 'https://api.together.xyz/v1',
+    needsKey: true,
+    local: false,
+    models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo'],
+  },
+];
+```
+
+Add the id to the `ProviderId` union, and it appears in every slot dropdown with live model
+listing, the capability rules applied, and the error copy generated. Nothing in the pipeline
+changes.
+
+### Reporting a bad run instead of a bug report
+
+Press **Copy results as JSON** and attach it. It contains the raw claims, the raw judge pairs
+(`judge.pairs`), the parse mode, the prompt hashes, the nonce and the per-model token counts —
+everything needed to tell "the judge is weak" apart from "the pipeline is broken", without
+anyone having to reproduce your exact run.
+
+---
+
+## Feature ideas
+
+Ordered roughly by how much they would teach you about the codebase. Each one fits the
+existing architecture; none require a rewrite.
+
+**Small, self-contained**
+
+1. **A/B/C/D slots** — the graph code already takes two claim lists; generalise to N and show
+   an N-way consensus core. `server/graph.ts` matching becomes a general graph problem.
+2. **Question presets you can save** — localStorage already holds the config; add a saved
+   question list next to it.
+3. **Cost estimate per run** — token counts are already returned per model. Add a per-provider
+   price table and show dollars next to latency.
+4. **Keyboard-driven run** — `⌘↵` to run, `1`–`4` for presets. The state machine is already
+   centralised in `App.tsx`.
+5. **Markdown export** — a run as a readable report (question, both answers, claims, pairs,
+   the numbers). Everything needed is in the result object.
+
+**Medium, more interesting**
+
+6. **Claim-level diff across runs** — store runs in localStorage, then show how the consensus
+   core moved when you changed the temperature or swapped a model. This turns Weave from a
+   one-shot instrument into a measurement over time.
+7. **Judge agreement scoring** — run classification twice with two different judges and report
+   where they disagree. That gives you an error bar on the headline number, which is the
+   honest answer to "how much should I trust 41.2%?".
+8. **Streaming claims** — extract claims from the *streaming* answer as it arrives, so nodes
+   appear while the model is still typing. The SSE plumbing is already there.
+9. **`/api/weave` without the UI** — a CLI (`weave "question" --a model --b model`) that prints
+   the same numbers. `scripts/verify.mjs` is already 80% of it.
+10. **A provider capability probe** — one button that sends a tiny request to each slot and
+    reports what that provider actually supports (reasoning tokens? thinking flag? JSON mode?)
+    instead of inferring it from the model name.
+
+**Larger, genuinely hard**
+
+11. **Embedding-based claim alignment as a second opinion** — not to replace the judge, but to
+    flag pairs the judge missed. Keep it labelled as a separate signal; never blend it into the
+    headline.
+12. **Argument structure instead of flat claims** — have the judge return premises and
+    conclusions, then draw the inference structure inside each answer. The force layout would
+    need a hierarchy force, which is a fun D3 problem.
+13. **Multi-run stability view** — run the same comparison N times and render the consensus
+    core with per-node stability (a claim that survives 9/10 runs is a different kind of fact
+    than one that appears once). This directly addresses the judge noise documented above.
+14. **Shareable permalink** — encode a run into a URL (claims are small enough for a compressed
+    fragment) so a graph can be shared without a server or a database.
+
 ---
 
 ## Non-goals
@@ -311,3 +758,15 @@ panel, and overlapping labels.
 No embeddings API dependency (the lexical fallback is required instead), no three.js, no
 graph library on top of D3, no graph database, no auth, no persistence beyond localStorage,
 no conversation history, no web search, no fine-tuning.
+
+---
+
+## Credits
+
+Built by **[Harish Kotra](https://harishkotra.me)** — more builds at
+**[dailybuild.xyz](https://dailybuild.xyz)**.
+
+Weave stands on D3 (`d3-force`, `d3-selection`, `d3-drag`, `d3-zoom`), React, Vite and
+Express. The interface is set in Archivo and JetBrains Mono, self-hosted.
+
+If you build something with it, or fork it into something better, I would like to see it.
