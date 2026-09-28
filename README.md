@@ -42,9 +42,6 @@ overlap — not from string similarity, not from an embedding.
         └──────────┘          └──────────┘          └──────────┘
 ```
 
-Built by [Harish Kotra](https://harishkotra.me) · more builds at
-[dailybuild.xyz](https://dailybuild.xyz) · [technical write-up](docs/blog.md)
-
 ![Weave: two models, one question, three graphs](docs/screenshots/02-result.png)
 
 *One real run: `openai/gpt-oss-20b` against `google/gemma-4-e4b`, judged by `gpt-oss-20b`.
