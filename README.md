@@ -12,6 +12,14 @@ contradictions are dashed red.
 The headline number is the share of the answer both models agreed on, measured from node
 overlap — not from string similarity, not from an embedding.
 
+<img width="2029" height="2381" alt="screencapture-localhost-5173-2026-09-28-23_32_25" src="https://github.com/user-attachments/assets/589b3a95-9bb6-46cb-bc71-edff9305ce2e" />
+<img width="1422" height="1133" alt="Screenshot at Sep 28 23-32-57" src="https://github.com/user-attachments/assets/e28a5f56-dc45-42cb-b3f1-e928f94e6d6a" />
+
+
+https://github.com/user-attachments/assets/87a0761f-0770-4c5a-a23f-47345c9da091
+
+
+
 ```
                     one question, sent to both at the same instant
                                     │
